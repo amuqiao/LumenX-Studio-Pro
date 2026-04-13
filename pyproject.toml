@@ -1,0 +1,77 @@
+[project]
+name = "lumenx"
+version = "0.1.0"
+description = "LumenX Studio backend"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+    "dashscope>=1.20.0",
+    "pywebview>=5.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "pyyaml>=6.0",
+    "PyJWT>=2.8.0",
+    "alibabacloud-videoenhan20200320>=1.0.0",
+    "alibabacloud-tea-openapi>=0.3.0",
+    "alibabacloud-tea-util>=0.3.0",
+    "oss2>=2.18.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+skip-string-normalization = false
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.venv
+  | venv
+  | build
+  | dist
+  | __pycache__
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E203", "W503"]
+exclude = [".git", "__pycache__", ".venv", "venv", "build", "dist"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
