@@ -37,8 +37,9 @@ export default function VideoAssembly() {
         try {
             const updatedProject = await api.selectVideo(currentProject.id, frameId, videoId);
             updateProject(currentProject.id, updatedProject);
-        } catch (error) {
+        } catch (error: any) {
             console.error("Failed to select video:", error);
+            alert(extractErrorDetail(error, "Failed to select this video variant."));
         }
     };
 

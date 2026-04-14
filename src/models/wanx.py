@@ -180,6 +180,7 @@ class WanxModel(VideoGenModel):
             "signature": "signature",
             "oss_access_key_id": "OSSAccessKeyId",
             "x_oss_security_token": "x-oss-security-token",
+            "x_oss_object_acl": "x-oss-object-acl",
             "x_oss_signature_version": "x-oss-signature-version",
             "x_oss_credential": "x-oss-credential",
             "x_oss_date": "x-oss-date",
@@ -195,6 +196,10 @@ class WanxModel(VideoGenModel):
         for key, value in policy_data.items():
             if key.startswith("x-oss-") and value and key not in form_data:
                 form_data[key] = str(value)
+            elif key.startswith("x_oss_") and value:
+                normalized_key = key.replace("_", "-")
+                if normalized_key not in form_data:
+                    form_data[normalized_key] = str(value)
 
         with open(local_path, "rb") as file_handle:
             files = {"file": (os.path.basename(local_path), file_handle)}

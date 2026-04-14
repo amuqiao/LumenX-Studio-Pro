@@ -47,6 +47,13 @@ def _safe_resolve_path(base_dir: str, untrusted_rel: str) -> str:
         raise ValueError(f"Path escapes base directory: {untrusted_rel}")
     return resolved
 
+
+def _normalize_entity_key(value: Optional[str]) -> str:
+    """Build a stable comparison key for entity matching across reparses."""
+    if not value:
+        return ""
+    return re.sub(r"\s+", "", value).lower()
+
 class ComicGenPipeline:
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
@@ -105,13 +112,71 @@ class ComicGenPipeline:
     def get_script(self, script_id: str) -> Optional[Script]:
         return self.scripts.get(script_id)
 
+    def _repair_script_consistency(self, script: Script) -> bool:
+        """Repair common persisted-state inconsistencies.
+
+        The main case we handle here is a project that still has completed
+        `video_tasks` with `frame_id`, but the `frames` list is unexpectedly
+        empty. In that state, Assembly can still show stale cached frames in the
+        frontend, but backend actions like `select_video_for_frame` fail with
+        "Frame not found".
+        """
+        repaired = False
+
+        if not script.frames:
+            tasks_with_frame = [t for t in script.video_tasks if t.frame_id]
+            if tasks_with_frame:
+                logger.warning(
+                    "[REPAIR] Script %s has %d video tasks but no frames. Reconstructing placeholder frames.",
+                    script.id,
+                    len(tasks_with_frame),
+                )
+                first_scene_id = script.scenes[0].id if script.scenes else "recovered-scene"
+                ordered_frame_ids: List[str] = []
+                seen = set()
+
+                for task in sorted(tasks_with_frame, key=lambda t: t.created_at):
+                    if task.frame_id not in seen:
+                        seen.add(task.frame_id)
+                        ordered_frame_ids.append(task.frame_id)
+
+                for frame_id in ordered_frame_ids:
+                    frame_tasks = sorted(
+                        [t for t in tasks_with_frame if t.frame_id == frame_id],
+                        key=lambda t: t.created_at,
+                    )
+                    first_task = frame_tasks[0]
+                    script.frames.append(
+                        StoryboardFrame(
+                            id=frame_id,
+                            scene_id=first_scene_id,
+                            action_description=first_task.prompt or "Recovered frame",
+                            image_prompt=first_task.prompt,
+                            video_prompt=first_task.prompt,
+                            image_url=first_task.image_url,
+                            selected_video_id=None,
+                            status=GenerationStatus.COMPLETED,
+                        )
+                    )
+
+                repaired = True
+
+        return repaired
+
     def _load_data(self) -> Dict[str, Script]:
         if not os.path.exists(self.data_file):
             return {}
         try:
             with open(self.data_file, 'r') as f:
                 data = json.load(f)
-                return {k: Script(**v) for k, v in data.items()}
+                scripts = {k: Script(**v) for k, v in data.items()}
+                repaired_any = False
+                for script in scripts.values():
+                    repaired_any = self._repair_script_consistency(script) or repaired_any
+                if repaired_any:
+                    self.scripts = scripts
+                    self._save_data()
+                return scripts
         except Exception as e:
             logger.error(f"Failed to load data: {e}")
             return {}
@@ -157,11 +222,100 @@ class ComicGenPipeline:
         new_script.style_preset = existing_script.style_preset
         new_script.style_prompt = existing_script.style_prompt
         new_script.merged_video_url = existing_script.merged_video_url
-        
+
+        # Preserve existing asset state when the same entity still exists after reparse.
+        self._carry_over_entity_assets(existing_script, new_script)
+
         # Replace the script in memory
         self.scripts[script_id] = new_script
         self._save_data()
         return new_script
+
+    def _carry_over_entity_assets(self, existing_script: Script, new_script: Script) -> None:
+        """Carry over assets/settings for entities that still exist after reparse.
+
+        Re-parse creates brand-new entity IDs. If we replace the whole project blindly,
+        generated assets become orphaned on disk because current entities no longer point
+        to the previous asset containers. We match by normalized entity name and reuse the
+        old IDs plus asset state.
+        """
+
+        char_id_map = {}
+        old_chars = {_normalize_entity_key(item.name): item for item in existing_script.characters}
+        for new_char in new_script.characters:
+            old_char = old_chars.get(_normalize_entity_key(new_char.name))
+            if not old_char:
+                continue
+            char_id_map[new_char.id] = old_char.id
+            new_char.id = old_char.id
+            new_char.full_body = old_char.full_body
+            new_char.three_views = old_char.three_views
+            new_char.head_shot = old_char.head_shot
+            new_char.full_body_image_url = old_char.full_body_image_url
+            new_char.full_body_prompt = old_char.full_body_prompt
+            new_char.full_body_asset = old_char.full_body_asset
+            new_char.three_view_image_url = old_char.three_view_image_url
+            new_char.three_view_prompt = old_char.three_view_prompt
+            new_char.three_view_asset = old_char.three_view_asset
+            new_char.headshot_image_url = old_char.headshot_image_url
+            new_char.headshot_prompt = old_char.headshot_prompt
+            new_char.headshot_asset = old_char.headshot_asset
+            new_char.video_assets = old_char.video_assets
+            new_char.video_prompt = old_char.video_prompt
+            new_char.image_url = old_char.image_url
+            new_char.avatar_url = old_char.avatar_url
+            new_char.is_consistent = old_char.is_consistent
+            new_char.full_body_updated_at = old_char.full_body_updated_at
+            new_char.three_view_updated_at = old_char.three_view_updated_at
+            new_char.headshot_updated_at = old_char.headshot_updated_at
+            new_char.base_character_id = old_char.base_character_id
+            new_char.voice_id = old_char.voice_id
+            new_char.voice_name = old_char.voice_name
+            new_char.voice_speed = old_char.voice_speed
+            new_char.voice_pitch = old_char.voice_pitch
+            new_char.voice_volume = old_char.voice_volume
+            new_char.locked = old_char.locked
+            new_char.status = old_char.status
+
+        scene_id_map = {}
+        old_scenes = {_normalize_entity_key(item.name): item for item in existing_script.scenes}
+        for new_scene in new_script.scenes:
+            old_scene = old_scenes.get(_normalize_entity_key(new_scene.name))
+            if not old_scene:
+                continue
+            scene_id_map[new_scene.id] = old_scene.id
+            new_scene.id = old_scene.id
+            new_scene.image_url = old_scene.image_url
+            new_scene.image_asset = old_scene.image_asset
+            new_scene.video_assets = old_scene.video_assets
+            new_scene.video_prompt = old_scene.video_prompt
+            new_scene.locked = old_scene.locked
+            new_scene.status = old_scene.status
+
+        prop_id_map = {}
+        old_props = {_normalize_entity_key(item.name): item for item in existing_script.props}
+        for new_prop in new_script.props:
+            old_prop = old_props.get(_normalize_entity_key(new_prop.name))
+            if not old_prop:
+                continue
+            prop_id_map[new_prop.id] = old_prop.id
+            new_prop.id = old_prop.id
+            new_prop.image_url = old_prop.image_url
+            new_prop.image_asset = old_prop.image_asset
+            new_prop.video_assets = old_prop.video_assets
+            new_prop.video_prompt = old_prop.video_prompt
+            new_prop.video_url = old_prop.video_url
+            new_prop.audio_url = old_prop.audio_url
+            new_prop.sfx_url = old_prop.sfx_url
+            new_prop.bgm_url = old_prop.bgm_url
+            new_prop.locked = old_prop.locked
+            new_prop.status = old_prop.status
+
+        for frame in new_script.frames:
+            if frame.scene_id in scene_id_map:
+                frame.scene_id = scene_id_map[frame.scene_id]
+            frame.character_ids = [char_id_map.get(cid, cid) for cid in frame.character_ids]
+            frame.prop_ids = [prop_id_map.get(pid, pid) for pid in frame.prop_ids]
 
 
     def generate_assets(self, script_id: str) -> Script:
@@ -1624,6 +1778,9 @@ class ComicGenPipeline:
         script = self.scripts.get(script_id)
         if not script:
             raise ValueError("Script not found")
+
+        if self._repair_script_consistency(script):
+            self._save_data()
             
         frame = next((f for f in script.frames if f.id == frame_id), None)
         if not frame:

@@ -432,26 +432,15 @@ export const useProjectStore = create<ProjectStore>()(
 
                 // Then fetch latest data from backend
                 try {
-                    const API_URL = typeof window !== 'undefined'
-                        ? (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')
-                        : 'http://localhost:8000';
-                    const response = await fetch(`${API_URL}/projects/${id}`);
-                    if (response.ok) {
-                        const rawData = await response.json();
-                        // Transform data to match frontend model (snake_case -> camelCase for specific fields)
-                        const latestProject = {
-                            ...rawData,
-                            originalText: rawData.original_text
-                        };
+                    const latestProject = await api.getProject(id);
 
-                        // Update both currentProject and projects array with latest data
-                        set((state) => ({
-                            currentProject: latestProject,
-                            projects: state.projects.map((p) =>
-                                p.id === id ? latestProject : p
-                            ),
-                        }));
-                    }
+                    // Update both currentProject and projects array with latest data
+                    set((state) => ({
+                        currentProject: latestProject,
+                        projects: state.projects.map((p) =>
+                            p.id === id ? latestProject : p
+                        ),
+                    }));
                 } catch (error) {
                     console.error('Failed to fetch latest project data:', error);
                     // Keep using cached version if fetch fails
